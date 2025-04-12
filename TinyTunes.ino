@@ -4,6 +4,9 @@
 #include "SPI.h"
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h> 
 #include <Adafruit_ImageReader.h> // Image-reading functions
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include "PrivateConfig.h"
 
 // CONFIGURABLE SETTINGS ---------------------------------------------------
 #define WIDTH  64             // Matrix width in pixels
@@ -30,6 +33,7 @@ FatFileSystem filesys;     // Filesystem object from SdFat
 Adafruit_ImageReader reader(filesys); 
 Adafruit_USBD_MSC usb_msc; // USB mass storage object
 
+// LED Matrix pinout config - default is for Adafruit Matrix Portal S3
 #define R1_PIN 42
 #define G1_PIN 41
 #define B1_PIN 40
@@ -47,6 +51,7 @@ Adafruit_USBD_MSC usb_msc; // USB mass storage object
 
 HUB75_I2S_CFG::i2s_pins _pins={R1_PIN, G1_PIN, B1_PIN, R2_PIN, G2_PIN, B2_PIN, A_PIN, B_PIN, C_PIN, D_PIN, E_PIN, LAT_PIN, OE_PIN, CLK_PIN};
 
+// Configure size and number of panels
 #define PANEL_RES_X 64      // Number of pixels wide of each INDIVIDUAL panel module. 
 #define PANEL_RES_Y 64     // Number of pixels tall of each INDIVIDUAL panel module.
 #define PANEL_CHAIN 1      // Total number of panels chained one to another
@@ -127,6 +132,8 @@ char *filenameByIndex(const char *path, const char *filter, int16_t index) {
   return NULL;
 }
 
+GFXcanvas16* bmpcanvas;
+
 void drawBMPFile(char *fname) {
   ImageReturnCode stat; // Status from image-reading functions
   Adafruit_Image img;
@@ -135,7 +142,7 @@ void drawBMPFile(char *fname) {
 
   
   Serial.printf("Size: %d,%d",img.width(), img.height());
-  GFXcanvas16* bmpcanvas = static_cast<GFXcanvas16*>(img.getCanvas());
+  bmpcanvas = static_cast<GFXcanvas16*>(img.getCanvas());
   uint16_t pixel; 
   for(int x=0; x<img.width(); x++) {
     for(int y=0; y<img.height(); y++) {
@@ -185,7 +192,7 @@ void setup() {
   dma_display->begin();
   
   /* all other pixel drawing functions can only be called after .begin() */
-  dma_display->fillScreen(dma_display->color565(0, 0, 0));
+  drawBMPFile("/img/TinyTunes.bmp");
 
   delay(1000); 
 }
@@ -196,43 +203,6 @@ int8_t BMPincrement = 1;   // +1 = next GIF, -1 = prev, 0 = same
 
 void loop() 
 {
-  if (msc_changed) {     // If filesystem has changed...
-    msc_changed = false; // Clear flag
-    BMPincrement = 1;    // Set index to next file when we resume here
-    return;              // Prioritize USB, handled in calling func
-  }
-
-#if defined(BACK_BUTTON)
-  if(!digitalRead(BACK_BUTTON)) {
-    BMPincrement = -1;                // Back
-    while(!digitalRead(BACK_BUTTON)); // Wait for release
-  }
-#endif
-#if defined(NEXT_BUTTON)
-  if(!digitalRead(NEXT_BUTTON)) {
-    BMPincrement = 1;                 // Forward
-    while(!digitalRead(NEXT_BUTTON)); // Wait for release
-  }
-#endif
-
-if (BMPincrement) { // Change file?
-  BMPindex += BMPincrement; // Fwd or back 1 file
-  int num_files = numFiles(BMPpath, "BMP");
-  if(BMPindex >= num_files) BMPindex = 0;         // 'Wrap around' file index
-  else if(BMPindex < 0) BMPindex = num_files - 1; // both directions
-
-  char *filename = filenameByIndex(BMPpath, "BMP", BMPindex);
-  if (filename) {
-    char fullname[sizeof BMPpath + 256];
-    sprintf(fullname, "%s/%s", BMPpath, filename); // Absolute path to GIF
-    Serial.printf("Opening file '%s'\n", fullname);
-    drawBMPFile(fullname);
-  }
-}
+ 
 delay(5000);
-
-  /* dma_display->setTextSize(1);     // size 1 == 8 pixels high
-  dma_display->setCursor(2, 54);    // start at top left, with 8 pixel of spacing
-  dma_display->setTextColor(dma_display->color444(118,109,136));
-  dma_display->println(artist); */
 }
