@@ -139,7 +139,21 @@ void setup() {
   dma_display->begin();
   
   // Draw Boot Logo
+  Serial.println("Displaying Boot Logo");
   drawBMPFile("/img/TinyTunes.bmp");
+
+  // Connect to WiFi
+  Serial.printf("Connecting to WiFi: %s", ssid);
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.print("WiFi Connected: "); 
+  Serial.print(WiFi.localIP());
+
   delay(1000); 
 }
 
