@@ -6,10 +6,18 @@
 #include <Adafruit_ImageReader.h> 
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include "PrivateConfig.h"
+#include "PrivateConfig.h"  
+// PrivateConfig.h is not included in repo
+// Create it in the root directory and define variables:  
+//    const char *ssid = "";
+//    const char *wifiPassword = "";
+//    const char *mqttHost = "homeassistant.local"; // Change this to your home assistant server
+//    const int httpPort = 8123; // Change this to your home assistant mqtt port, typically 1883
+//    const char *mqttClientName = ""; // Create a name for your mqtt client (can be same as user)
+//    const char *mqttUser = ""; // Create a home assistant user with local access
+//    const char *mqttPassword = ""; // Password for home assistant user with local access
 
 // FLASH FILESYSTEM STUFF -----------------------------------------------------------
-
 // External flash macros for QSPI or SPI are defined in board variant file.
 #if defined(ARDUINO_ARCH_ESP32)
 static Adafruit_FlashTransport_ESP32 flashTransport;
@@ -100,6 +108,41 @@ void drawBMPFile(char *fname) {
   }
 }
 
+// MQTT PubSub ---------------------------------------------------------------------
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("MQTT Message [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i=0;i<length;i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+}
+
+NetworkClient ethClient;
+PubSubClient mqttClient(ethClient);
+
+void mqttReconnect() {
+  // Loop until we're reconnected
+  while (!mqttClient.connected()) {
+    Serial.println("Attempting MQTT connection...");
+    // Attempt to connect
+    if (mqttClient.connect(mqttClientName,mqttUser,mqttPassword)) {
+      Serial.println("connected");
+      // Once connected, publish an announcement...
+      mqttClient.publish("outTopic","hello world");
+      // ... and resubscribe
+      mqttClient.subscribe("inTopic");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
 // ARDUINO SETUP FUNCTION -----------------------------------------------------------
 void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
@@ -144,7 +187,7 @@ void setup() {
 
   // Connect to WiFi
   Serial.printf("Connecting to WiFi: %s", ssid);
-  WiFi.begin(ssid, password);
+  WiFi.begin(ssid, wifiPassword);
 
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
@@ -154,11 +197,18 @@ void setup() {
   Serial.print("WiFi Connected: "); 
   Serial.print(WiFi.localIP());
 
-  delay(1000); 
+  // Connect to MQTT
+  mqttClient.setServer(mqttHost, mqttPort);
+  mqttClient.setCallback(mqttCallback);
+  // Allow the hardware to sort itself out
+  delay(1500); 
 }
 
 // ARDUINO MAIN LOOP ------------------------------------------------------------------
 void loop() 
 {
-delay(5000);
+  if (!mqttClient.connected()) {
+    mqttReconnect();
+  }
+  mqttClient.loop();
 }
