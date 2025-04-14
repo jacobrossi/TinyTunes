@@ -130,9 +130,9 @@ void mqttReconnect() {
     if (mqttClient.connect(mqttClientName,mqttUser,mqttPassword)) {
       Serial.println("connected");
       // Once connected, publish an announcement...
-      mqttClient.publish("outTopic","hello world");
+      mqttClient.publish("tinytunes_status","connected");
       // ... and resubscribe
-      mqttClient.subscribe("inTopic");
+      mqttClient.subscribe("tinytunes_newmedia");
     } else {
       Serial.print("failed, rc=");
       Serial.print(mqttClient.state());
