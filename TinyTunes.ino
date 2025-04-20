@@ -5,7 +5,7 @@
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h> 
 #include <Adafruit_ImageReader.h> 
 #include <WiFi.h>
-#include <HTTPClient.h>
+#include <ArduinoHttpClient.h>
 #include <PubSubClient.h>
 #include "PrivateConfig.h"
 #include <TJpg_Decoder.h>  
@@ -148,8 +148,9 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   }
 }
 
-NetworkClient ethClient;
-PubSubClient mqttClient(ethClient);
+WiFiClient wifi_mqtt;
+WiFiClient wifi_http;
+PubSubClient mqttClient(wifi_mqtt);
 
 void mqttReconnect() {
   if ((WiFi.status() == WL_CONNECTED)) {
@@ -178,63 +179,62 @@ void mqttReconnect() {
 
 // HTTP ---------------------------------------------------------------------
 #define FETCHED_IMG_BUFFER_SIZE 200000 //Max bytes of the image
-const int FETCH_CHUNK_SIZE = 128; //Max bytes to read at a time
+//const int FETCH_CHUNK_SIZE = 128; //Max bytes to read at a time
 uint8_t fetchedImg[FETCHED_IMG_BUFFER_SIZE] = {0};
+// Number of milliseconds to wait without receiving any data before we give up
+const int kNetworkTimeout = 30*1000;
+// Number of milliseconds to wait if no data is available before trying again
+const int kNetworkDelay = 1000;
+
+HttpClient http = HttpClient(wifi_http, haURL, haPort);
 
 void fetchImg() {
 
   //Check WiFi connection
   if ((WiFi.status() == WL_CONNECTED)) {
-    HTTPClient http;
-    http.setTimeout(30000);
-    http.begin(haURL,haPort,url);
-    Serial.printf("[HTTP] GET (%s) ... ", url);
-
-    // Start connection and send HTTP header
-    int httpCode = http.GET();
-    Serial.printf("code: %d\n", httpCode);
-    if (httpCode == HTTP_CODE_OK) {
-      // Get length of document (is -1 when Server sends no Content-Length header)
-      int responseLength = http.getSize();
-      Serial.printf("Response Length: %d\n", responseLength);
-
-      int nextByte = 0;
-      int remainingLength = responseLength;
-
-      // Get tcp stream
-      WiFiClient* stream = http.getStreamPtr();
+    // Request image
+    Serial.printf("[HTTP] GET: %s\n", url);
+    int err = 0;
+    err = http.get(url);
+    if(err == 0) {
+      int httpCode = http.responseStatusCode();
+      Serial.printf("Response Code: %d\n", httpCode);
+      //int contentLength = http.contentLength();
+      //Serial.printf("Response Length: %s\n", contentLength);
 
       // Read all data from server
-      Serial.print("Reading");
-      while (http.connected() && (remainingLength > 0 || remainingLength == -1) && (nextByte + FETCH_CHUNK_SIZE < FETCHED_IMG_BUFFER_SIZE)) {
-        // Get available data size
-        size_t availableSize = stream->available();
-
-        if (availableSize) {
-          // Read up to max chunk size
-          int sizeRead = stream->readBytes(&fetchedImg[nextByte], ((availableSize > FETCH_CHUNK_SIZE) ? FETCH_CHUNK_SIZE : availableSize));
-          Serial.print(".");
-
-          // Calculate remaining bytes
-          if (remainingLength > 0) {
-            remainingLength -= sizeRead;
-          }
+      //Serial.print("Downloading");
+      unsigned long timeoutStart = millis();
+      // While we haven't timed out & haven't reached the end of the body
+      int nextByte = 0;
+      while ((http.connected() || http.available()) && (!http.endOfBodyReached()) && ((millis() - timeoutStart) < kNetworkTimeout)) {
+        if (http.available()) {
+          fetchedImg[nextByte++] = (uint8_t)http.read());
+          //Serial.print(".");
+          //Keep MQTT alive
+          mqttClient.loop();
+          timeoutStart = millis();
+        } else {
+          // We haven't got any data, so let's pause to allow some to arrive
+          delay(kNetworkDelay);
         }
-        yield();
       }
-      Serial.println();
-      Serial.print("[HTTP] connection closed or file end.\n");
+        http.stop();
+        Serial.println();
+        Serial.println("Download Complete");
 
-      uint16_t w = 0, h = 0;
-      TJpgDec.getJpgSize(&w, &h, fetchedImg, sizeof(fetchedImg));
-      Serial.print("Width = "); Serial.print(w); Serial.print(", height = "); Serial.println(h);
+        uint16_t w = 0, h = 0;
+        TJpgDec.getJpgSize(&w, &h, fetchedImg, nextByte);
+        Serial.print("Width = ");
+        Serial.print(w);
+        Serial.print(", height = ");
+        Serial.println(h);
 
-      // Draw the image, top left at 0,0
-      TJpgDec.drawJpg(0, 0, fetchedImg, sizeof(fetchedImg));
-    } else {
-      Serial.printf("[HTTP] GET... failed, error: %s\n", http.errorToString(httpCode).c_str());
+        // Draw the image, top left at 0,0
+        TJpgDec.drawJpg(0, 0, fetchedImg, nextByte);
+    }else{
+      Serial.printf("Error with request: %d\n",err);
     }
-    http.end();
   } else {
     Serial.println("Not connected to Wifi");
   }
@@ -264,7 +264,7 @@ bool drawImgBlock(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap
 
   // This function will clip the image block rendering automatically at the TFT boundaries
   //tft.pushImage(x, y, w, h, bitmap);
-  Serial.printf("Drawing block [%d,%d,%d,%d]\n",x,y,w,h);
+  //Serial.printf("Drawing block [%d,%d,%d,%d]\n",x,y,w,h);
   dma_display->drawRGBBitmap(x,y,bitmap,w,h);
   
   // Return 1 to decode next block
@@ -311,19 +311,18 @@ void setup() {
   // Connect to MQTT
   mqttClient.setServer(mqttHost, mqttPort);
   mqttClient.setCallback(mqttCallback);
+  mqttClient.setKeepAlive(0xFFFF);
 
   // Setup jpg decoder
   // The jpeg image can be scaled by a factor of 1, 2, 4, or 8
   TJpgDec.setJpgScale(8);
 
   // The byte order can be swapped (set true for TFT_eSPI)
-  TJpgDec.setSwapBytes(true);
+  TJpgDec.setSwapBytes(false);
 
   // The decoder must be given the exact name of the rendering function above
   TJpgDec.setCallback(drawImgBlock);
 
-
-  
   //TJpgDec.drawSdJpg(0, 0, filesys.open("/test.jpg", FILE_READ)
 
   // Allow the hardware to sort itself out
@@ -337,6 +336,4 @@ void loop()
     mqttReconnect();
   }
   mqttClient.loop();
-
-  
 }
