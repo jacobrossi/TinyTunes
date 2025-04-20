@@ -156,10 +156,10 @@ void mqttReconnect() {
   if ((WiFi.status() == WL_CONNECTED)) {
     // Loop until we're reconnected
     while (!mqttClient.connected()) {
-      Serial.println("Attempting MQTT connection...");
+      Serial.print("Connecting to MQTT...");
       // Attempt to connect
       if (mqttClient.connect(mqttClientName,mqttUser,mqttPassword)) {
-        Serial.println("connected");
+        Serial.println("connected.");
         // Once connected, publish an announcement...
         mqttClient.publish("tinytunes_status","connected");
         // ... and resubscribe
@@ -167,9 +167,9 @@ void mqttReconnect() {
       } else {
         Serial.print("failed, rc=");
         Serial.print(mqttClient.state());
-        Serial.println(" try again in 5 seconds");
+        Serial.println(" try again in 3 seconds");
         // Wait 5 seconds before retrying
-        delay(5000);
+        delay(3000);
       }
     }
   }else{
@@ -184,7 +184,11 @@ uint8_t fetchedImg[FETCHED_IMG_BUFFER_SIZE] = {0};
 // Number of milliseconds to wait without receiving any data before we give up
 const int kNetworkTimeout = 30*1000;
 // Number of milliseconds to wait if no data is available before trying again
-const int kNetworkDelay = 1000;
+const int kNetworkDelay = 0;
+// Retry settings
+const int kRetryDelay = 1500;
+const int kRetryTries = 2;
+int retryCount=0;
 
 HttpClient http = HttpClient(wifi_http, haURL, haPort);
 
@@ -197,43 +201,47 @@ void fetchImg() {
     int err = 0;
     err = http.get(url);
     if(err == 0) {
+      retryCount = 0;
       int httpCode = http.responseStatusCode();
-      Serial.printf("Response Code: %d\n", httpCode);
-      //int contentLength = http.contentLength();
-      //Serial.printf("Response Length: %s\n", contentLength);
-
-      // Read all data from server
-      //Serial.print("Downloading");
+      Serial.printf("Response Code: %d\nDownloading ", httpCode);
       unsigned long timeoutStart = millis();
+      unsigned long downloadStart = timeoutStart;
       // While we haven't timed out & haven't reached the end of the body
       int nextByte = 0;
       while ((http.connected() || http.available()) && (!http.endOfBodyReached()) && ((millis() - timeoutStart) < kNetworkTimeout)) {
         if (http.available()) {
-          fetchedImg[nextByte++] = (uint8_t)http.read());
-          //Serial.print(".");
-          //Keep MQTT alive
-          mqttClient.loop();
+          fetchedImg[nextByte++] = (uint8_t)http.read();
           timeoutStart = millis();
         } else {
           // We haven't got any data, so let's pause to allow some to arrive
-          delay(kNetworkDelay);
+          //Serial.print(".");
+          //delay(kNetworkDelay);
         }
       }
-        http.stop();
-        Serial.println();
-        Serial.println("Download Complete");
+        unsigned long duration = millis()-downloadStart;
+        unsigned long speed = (nextByte/1024)/(duration/1000);
+        Serial.printf("\nComplete. Duration: %dms Avg Speed: %dKb/s\n",duration,speed);
 
         uint16_t w = 0, h = 0;
         TJpgDec.getJpgSize(&w, &h, fetchedImg, nextByte);
-        Serial.print("Width = ");
-        Serial.print(w);
-        Serial.print(", height = ");
-        Serial.println(h);
+        Serial.printf("Width: %dpx, Height:%dpx, Size: %d bytes\n",w,h,nextByte);
 
         // Draw the image, top left at 0,0
+        dma_display->clearScreen();
         TJpgDec.drawJpg(0, 0, fetchedImg, nextByte);
+        Serial.println("Draw Complete");
     }else{
-      Serial.printf("Error with request: %d\n",err);
+      Serial.printf("Request Error: %d\n",err);
+      http.endRequest();
+      http.stop();
+      if (retryCount++<kRetryTries) {
+         delay(kRetryDelay);
+         Serial.println("Retrying");
+         fetchImg();
+      } else {
+        Serial.printf("Failed to fetch img after %d attempts\n",retryCount);
+        retryCount=0;
+      }
     }
   } else {
     Serial.println("Not connected to Wifi");
@@ -326,7 +334,7 @@ void setup() {
   //TJpgDec.drawSdJpg(0, 0, filesys.open("/test.jpg", FILE_READ)
 
   // Allow the hardware to sort itself out
-  delay(1500); 
+  //delay(1500); 
 }
 
 // ARDUINO MAIN LOOP ------------------------------------------------------------------
