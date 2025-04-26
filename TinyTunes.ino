@@ -168,12 +168,14 @@ void mqttReconnect() {
         Serial.print("failed, rc=");
         Serial.print(mqttClient.state());
         Serial.println(" try again in 3 seconds");
-        // Wait 5 seconds before retrying
+        // Wait 3 seconds before retrying
+        yield();
         delay(3000);
       }
     }
   }else{
     Serial.println("WiFi Disconnected");
+    connectToNetwork();
   }
 }
 
@@ -187,13 +189,11 @@ const int kNetworkTimeout = 30*1000;
 const int kNetworkDelay = 0;
 // Retry settings
 const int kRetryDelay = 1500;
-const int kRetryTries = 2;
+const int kRetryTries = 4;
 int retryCount=0;
 
-HttpClient http = HttpClient(wifi_http, haURL, haPort);
-
 void fetchImg() {
-
+  HttpClient http = HttpClient(wifi_http, haURL, haPort);
   //Check WiFi connection
   if ((WiFi.status() == WL_CONNECTED)) {
     // Request image
@@ -203,21 +203,32 @@ void fetchImg() {
     if(err == 0) {
       retryCount = 0;
       int httpCode = http.responseStatusCode();
+      if(httpCode < 200) {
+        Serial.printf("Response Code: %d\n Retrying...\n", httpCode);
+        delay(kRetryDelay);
+       // fetchImg();
+        return;
+      }
       Serial.printf("Response Code: %d\nDownloading ", httpCode);
       unsigned long timeoutStart = millis();
       unsigned long downloadStart = timeoutStart;
       // While we haven't timed out & haven't reached the end of the body
       int nextByte = 0;
-      while ((http.connected() || http.available()) && (!http.endOfBodyReached()) && ((millis() - timeoutStart) < kNetworkTimeout)) {
-        if (http.available()) {
-          fetchedImg[nextByte++] = (uint8_t)http.read();
-          timeoutStart = millis();
-        } else {
-          // We haven't got any data, so let's pause to allow some to arrive
-          //Serial.print(".");
-          //delay(kNetworkDelay);
-        }
-      }
+     // Use a buffer to read chunks of data
+     const int bufferSize = 1024; // Adjust as needed
+     uint8_t buffer[bufferSize];
+
+     while ((http.connected() || http.available()) && (!http.endOfBodyReached()) && ((millis() - timeoutStart) < kNetworkTimeout)) {
+       if (http.available()) {
+         int bytesRead = http.read(buffer, bufferSize); // Read a chunk
+         if (bytesRead > 0) {
+           memcpy(fetchedImg + nextByte, buffer, bytesRead); // Copy to fetchedImg
+           nextByte += bytesRead;
+           timeoutStart = millis();
+         }
+       }
+       yield();
+     }
         unsigned long duration = millis()-downloadStart;
         unsigned long speed = (nextByte/1024)/(duration/1000);
         Serial.printf("\nComplete. Duration: %dms Avg Speed: %dKb/s\n",duration,speed);
@@ -228,8 +239,25 @@ void fetchImg() {
 
         // Draw the image, top left at 0,0
         dma_display->clearScreen();
-        TJpgDec.drawJpg(0, 0, fetchedImg, nextByte);
-        Serial.println("Draw Complete");
+        JRESULT decoderResult = TJpgDec.drawJpg(0, 0, fetchedImg, nextByte);
+        if(decoderResult==JDR_OK) {
+          Serial.println("JPG Decoded and Rendered");
+        }else{
+          if(decoderResult==JDR_INTR) {
+            Serial.println("JPG Decoder Error: JDR_INTR - The decompression process was interrupted by output function.");
+          }else if(decoderResult==JDR_INP) {
+            Serial.println("JPG Decoder Error: JDR_INP - An error occured in input function due to hard error or wrong stream termination.");
+          }else if(decoderResult==JDR_PAR) {
+            Serial.println("JPG Decoder Error: JDR_PAR - Parameter error. Given scale factor is invalid.");
+          }else if(decoderResult==JDR_FMT1) {
+            Serial.println("JPG Decoder Error: JDR_FMT1 - Data format error. The input JPEG data can be collapted.");
+          }else{
+            Serial.println("JPG Decode Error: Unknown");
+          }
+          
+         // fetchImg();
+          return;
+        }
     }else{
       Serial.printf("Request Error: %d\n",err);
       http.endRequest();
@@ -237,14 +265,16 @@ void fetchImg() {
       if (retryCount++<kRetryTries) {
          delay(kRetryDelay);
          Serial.println("Retrying");
-         fetchImg();
+         //fetchImg();
+         return;
       } else {
         Serial.printf("Failed to fetch img after %d attempts\n",retryCount);
         retryCount=0;
       }
     }
   } else {
-    Serial.println("Not connected to Wifi");
+    Serial.println("WiFi Disconnected");
+    connectToNetwork();
   }
 }
 
@@ -268,7 +298,7 @@ void drawBMPFile(char *fname) {
 bool drawImgBlock(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap)
 {
   // Stop further decoding as image is running off bottom of screen
-  if ( y >= PANEL_RES_Y ) return 0;
+  if ( y >= PANEL_RES_Y ) return 1;
 
   // This function will clip the image block rendering automatically at the TFT boundaries
   //tft.pushImage(x, y, w, h, bitmap);
@@ -277,6 +307,26 @@ bool drawImgBlock(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap
   
   // Return 1 to decode next block
   return 1;
+}
+
+void connectToNetwork() {
+   // Connect to WiFi
+  Serial.printf("Connecting to WiFi: %s", ssid);
+  WiFi.begin(ssid, wifiPassword);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.print("WiFi Connected: "); 
+  Serial.print(WiFi.localIP());
+  Serial.printf(" RSSI: %d\n",WiFi.RSSI());
+
+  // Connect to MQTT
+  mqttClient.setServer(mqttHost, mqttPort);
+  mqttClient.setCallback(mqttCallback);
+  mqttClient.setKeepAlive(60);
 }
 
 // ARDUINO SETUP FUNCTION -----------------------------------------------------------
@@ -300,38 +350,19 @@ void setup() {
   initDisplay();
   
   // Draw Boot Logo
+  Serial.println("\n\n==========================BOOT=======================================");
   Serial.println("Displaying Boot Logo");
   drawBMPFile("/img/TinyTunes.bmp");
 
-  // Connect to WiFi
-  Serial.printf("Connecting to WiFi: %s", ssid);
-  WiFi.begin(ssid, wifiPassword);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.print("WiFi Connected: "); 
-  Serial.print(WiFi.localIP());
-  Serial.println(" ");
-
-  // Connect to MQTT
-  mqttClient.setServer(mqttHost, mqttPort);
-  mqttClient.setCallback(mqttCallback);
-  mqttClient.setKeepAlive(0xFFFF);
+  connectToNetwork();
 
   // Setup jpg decoder
   // The jpeg image can be scaled by a factor of 1, 2, 4, or 8
   TJpgDec.setJpgScale(8);
-
   // The byte order can be swapped (set true for TFT_eSPI)
   TJpgDec.setSwapBytes(false);
-
   // The decoder must be given the exact name of the rendering function above
   TJpgDec.setCallback(drawImgBlock);
-
-  //TJpgDec.drawSdJpg(0, 0, filesys.open("/test.jpg", FILE_READ)
 
   // Allow the hardware to sort itself out
   //delay(1500); 
@@ -340,6 +371,12 @@ void setup() {
 // ARDUINO MAIN LOOP ------------------------------------------------------------------
 void loop() 
 {
+  // Reconnect to wifi if disconnected
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi Disconnected. Reconnecting...");
+    connectToNetwork();
+}
+  //Process MQTT for new messages
   if (!mqttClient.connected()) {
     mqttReconnect();
   }
