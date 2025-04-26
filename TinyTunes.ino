@@ -129,18 +129,14 @@ void msc_flush_cb(void) {
 char url[256];
 char payload_cpy[256];
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
-  Serial.print("MQTT Message [");
-  Serial.print(topic);
-  Serial.print("] ");
-  for (int i=0;i<length;i++) {
-  //  Serial.print((char)payload[i]);
-    url[i] = (char)payload[i];
+  Serial.printf("MQTT Message [%s]\n",topic);
+  if (length < sizeof(url)) {
+    memcpy(url, payload, length);
+    url[length] = '\0';
+  } else {
+    Serial.println("MQTT payload too large");
   }
-  url[length] = '\0';
-  //String message = (char*)payload;
-  //url = haURL + message;
 
-  //sprintf(url,"%s%s",haURL,payload_cpy);
   Serial.printf("%s\n",url);
 
   if(strcmp(topic,"tinytunes_newmedia")==0) {
@@ -155,7 +151,8 @@ PubSubClient mqttClient(wifi_mqtt);
 void mqttReconnect() {
   if ((WiFi.status() == WL_CONNECTED)) {
     // Loop until we're reconnected
-    while (!mqttClient.connected()) {
+    unsigned long startAttemptTime = millis();
+    while (!mqttClient.connected() && millis() - startAttemptTime < 10000) { // 10-second timeout to avoid heap fragmentation
       Serial.print("Connecting to MQTT...");
       // Attempt to connect
       if (mqttClient.connect(mqttClientName,mqttUser,mqttPassword)) {
@@ -180,7 +177,7 @@ void mqttReconnect() {
 }
 
 // HTTP ---------------------------------------------------------------------
-#define FETCHED_IMG_BUFFER_SIZE 200000 //Max bytes of the image
+#define FETCHED_IMG_BUFFER_SIZE 198000 //Max bytes of the image
 //const int FETCH_CHUNK_SIZE = 128; //Max bytes to read at a time
 uint8_t fetchedImg[FETCHED_IMG_BUFFER_SIZE] = {0};
 // Number of milliseconds to wait without receiving any data before we give up
@@ -193,6 +190,7 @@ const int kRetryTries = 4;
 int retryCount=0;
 
 void fetchImg() {
+  Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
   HttpClient http = HttpClient(wifi_http, haURL, haPort);
   //Check WiFi connection
   if ((WiFi.status() == WL_CONNECTED)) {
@@ -229,6 +227,7 @@ void fetchImg() {
        }
        yield();
      }
+      http.stop();
         unsigned long duration = millis()-downloadStart;
         unsigned long speed = (nextByte/1024)/(duration/1000);
         Serial.printf("\nComplete. Duration: %dms Avg Speed: %dKb/s\n",duration,speed);
@@ -265,7 +264,7 @@ void fetchImg() {
       if (retryCount++<kRetryTries) {
          delay(kRetryDelay);
          Serial.println("Retrying");
-         //fetchImg();
+         fetchImg();
          return;
       } else {
         Serial.printf("Failed to fetch img after %d attempts\n",retryCount);
@@ -276,12 +275,12 @@ void fetchImg() {
     Serial.println("WiFi Disconnected");
     connectToNetwork();
   }
+  http.stop();
 }
 
 // GRAPHICS  ----------------------------------------------------------------
-GFXcanvas16* bmpcanvas;
-
 void drawBMPFile(char *fname) {
+  GFXcanvas16* bmpcanvas;
   ImageReturnCode stat; // Status from image-reading functions
   Adafruit_Image img;
   stat = reader.loadBMP(fname, img);
@@ -300,9 +299,7 @@ bool drawImgBlock(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap
   // Stop further decoding as image is running off bottom of screen
   if ( y >= PANEL_RES_Y ) return 1;
 
-  // This function will clip the image block rendering automatically at the TFT boundaries
-  //tft.pushImage(x, y, w, h, bitmap);
-  //Serial.printf("Drawing block [%d,%d,%d,%d]\n",x,y,w,h);
+  // This function will clip the image block rendering automatically at the matrix boundaries
   dma_display->drawRGBBitmap(x,y,bitmap,w,h);
   
   // Return 1 to decode next block
@@ -363,9 +360,6 @@ void setup() {
   TJpgDec.setSwapBytes(false);
   // The decoder must be given the exact name of the rendering function above
   TJpgDec.setCallback(drawImgBlock);
-
-  // Allow the hardware to sort itself out
-  //delay(1500); 
 }
 
 // ARDUINO MAIN LOOP ------------------------------------------------------------------
