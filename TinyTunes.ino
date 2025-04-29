@@ -162,9 +162,7 @@ void mqttReconnect() {
         // ... and resubscribe
         mqttClient.subscribe("tinytunes_newmedia");
       } else {
-        Serial.print("failed, rc=");
-        Serial.print(mqttClient.state());
-        Serial.println(" try again in 3 seconds");
+        Serial.printf("failed, code=%d  WiFi RSSI=%d try again in 3 seconds\n", mqttClient.state(), WiFi.RSSI());
         // Wait 3 seconds before retrying
         yield();
         delay(3000);
@@ -191,6 +189,7 @@ int retryCount=0;
 
 void fetchImg() {
   Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
+  Serial.printf("WiFi RSSI: %d\n",WiFi.RSSI());
   HttpClient http = HttpClient(wifi_http, haURL, haPort);
   //Check WiFi connection
   if ((WiFi.status() == WL_CONNECTED)) {
@@ -326,9 +325,10 @@ void connectToNetwork() {
   mqttClient.setKeepAlive(60);
 }
 
+int mqttPulse = 0;
+
 // ARDUINO SETUP FUNCTION -----------------------------------------------------------
 void setup() {
-
   // Init HW buttons
   pinMode(LED_BUILTIN, OUTPUT);
 #if defined(BACK_BUTTON)
@@ -360,6 +360,7 @@ void setup() {
   TJpgDec.setSwapBytes(false);
   // The decoder must be given the exact name of the rendering function above
   TJpgDec.setCallback(drawImgBlock);
+  mqttPulse = millis();
 }
 
 // ARDUINO MAIN LOOP ------------------------------------------------------------------
@@ -369,10 +370,15 @@ void loop()
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi Disconnected. Reconnecting...");
     connectToNetwork();
-}
+  }
   //Process MQTT for new messages
   if (!mqttClient.connected()) {
     mqttReconnect();
   }
   mqttClient.loop();
+  //Publish a message to keep mqtt alive (workaround bug)
+  if(millis()-mqttPulse>10000) {
+    mqttClient.publish("tinytunes_status","connected");
+    mqttPulse = millis();
+  }
 }
