@@ -203,7 +203,8 @@ void fetchImg() {
       if(httpCode < 200) {
         Serial.printf("Response Code: %d\n Retrying...\n", httpCode);
         delay(kRetryDelay);
-       // fetchImg();
+        http.stop();
+        fetchImg();
         return;
       }
       Serial.printf("Response Code: %d\nDownloading ", httpCode);
@@ -258,7 +259,6 @@ void fetchImg() {
         }
     }else{
       Serial.printf("Request Error: %d\n",err);
-      http.endRequest();
       http.stop();
       if (retryCount++<kRetryTries) {
          delay(kRetryDelay);
@@ -364,6 +364,7 @@ void setup() {
 }
 
 // ARDUINO MAIN LOOP ------------------------------------------------------------------
+char keepAlive[10];
 void loop() 
 {
   // Reconnect to wifi if disconnected
@@ -378,7 +379,8 @@ void loop()
   mqttClient.loop();
   //Publish a message to keep mqtt alive (workaround bug)
   if(millis()-mqttPulse>10000) {
-    mqttClient.publish("tinytunes_status","connected");
+    sprintf(keepAlive,"%d",random());
+    mqttClient.publish("tinytunes_keepalive", keepAlive);
     mqttPulse = millis();
   }
 }
