@@ -175,9 +175,9 @@ void mqttReconnect() {
 }
 
 // HTTP ---------------------------------------------------------------------
-#define FETCHED_IMG_BUFFER_SIZE 198000 //Max bytes of the image
+#define FETCHED_IMG_BUFFER_SIZE 350000 //Max bytes of the image
 //const int FETCH_CHUNK_SIZE = 128; //Max bytes to read at a time
-uint8_t fetchedImg[FETCHED_IMG_BUFFER_SIZE] = {0};
+uint8_t *fetchedImg;
 // Number of milliseconds to wait without receiving any data before we give up
 const int kNetworkTimeout = 30*1000;
 // Number of milliseconds to wait if no data is available before trying again
@@ -216,12 +216,15 @@ void fetchImg() {
      const int bufferSize = 1024; // Adjust as needed
      uint8_t buffer[bufferSize];
 
-     while ((http.connected() || http.available()) && (!http.endOfBodyReached()) && ((millis() - timeoutStart) < kNetworkTimeout)) {
+     while ((http.connected() || http.available()) && (!http.endOfBodyReached()) && ((millis() - timeoutStart) < kNetworkTimeout) && (nextByte+bufferSize<FETCHED_IMG_BUFFER_SIZE)) {
        if (http.available()) {
          int bytesRead = http.read(buffer, bufferSize); // Read a chunk
          if (bytesRead > 0) {
            memcpy(fetchedImg + nextByte, buffer, bytesRead); // Copy to fetchedImg
            nextByte += bytesRead;
+           if(nextByte+bufferSize>FETCHED_IMG_BUFFER_SIZE) {
+            Serial.println("- Error: exceeds buffer size.");
+           }
            timeoutStart = millis();
          }
        }
@@ -345,6 +348,8 @@ void setup() {
   Serial.begin(115200);
 
   initDisplay();
+
+  fetchedImg = (uint8_t *)ps_malloc(FETCHED_IMG_BUFFER_SIZE * sizeof(uint8_t));
   
   // Draw Boot Logo
   Serial.println("\n\n==========================BOOT=======================================");
