@@ -178,7 +178,7 @@ void mqttReconnect() {
 #define FETCHED_IMG_BUFFER_SIZE 350000 //Max bytes of the image
 //const int FETCH_CHUNK_SIZE = 128; //Max bytes to read at a time
 uint8_t *fetchedImg;
-#define DECODED_IMG_BUFFER_SIZE 640*640 //Max size of image from Spotify we'll accept
+#define DECODED_IMG_BUFFER_SIZE 640 //Max size of image from Spotify we'll accept
 uint16_t *decodedImg;
 // Number of milliseconds to wait without receiving any data before we give up
 const int kNetworkTimeout = 30*1000;
@@ -189,7 +189,7 @@ const int kRetryDelay = 1500;
 const int kRetryTries = 4;
 int retryCount=0;
 
-void resizeImg(uint8_t *orig_img, int orig_width, int orig_height, int final_width, int final_height) {
+void resizeImg(uint16_t *orig_img, int orig_width, int orig_height, int final_width, int final_height) {
   // Calculate how many pixels from the original image are in each block to be averaged into a single pixel of the final image
   int block_width = orig_width/final_width;
   int block_height = orig_height/final_height;
@@ -266,7 +266,9 @@ void fetchImg() {
         dma_display->clearScreen();
         JRESULT decoderResult = TJpgDec.drawJpg(0, 0, fetchedImg, nextByte);
         if(decoderResult==JDR_OK) {
-          Serial.println("JPG Decoded and Rendered");
+          Serial.println("JPG Decoded");
+          // Now resize
+          resizeImg(decodedImg,DECODED_IMG_BUFFER_SIZE,DECODED_IMG_BUFFER_SIZE,PANEL_RES_X,PANEL_RES_Y);
         }else{
           if(decoderResult==JDR_INTR) {
             Serial.println("JPG Decoder Error: JDR_INTR - The decompression process was interrupted by output function.");
@@ -279,8 +281,7 @@ void fetchImg() {
           }else{
             Serial.println("JPG Decode Error: Unknown");
           }
-          
-         // fetchImg();
+          // fetchImg();
           return;
         }
     }else{
@@ -322,14 +323,13 @@ void drawBMPFile(char *fname) {
 bool drawImgBlock(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap)
 {
   // Stop further decoding as image is running off bottom of screen
-  if ( y >= PANEL_RES_Y ) return 1;
+  //if ( y >= PANEL_RES_Y ) return 1;
 
   // This function will clip the image block rendering automatically at the matrix boundaries
   //dma_display->drawRGBBitmap(x,y,bitmap,w,h);
-  final_y*block_height+block_y)*orig_width +(final_x*block_width+block_x
-  for(i=0; i<w; i++) {
-    for(j=0; j<h; j++) {
-      decodedImg[x+i]
+  for(int i=0; i<w && (x+i)<DECODED_IMG_BUFFER_SIZE; i++) {
+    for(int j=0; j<h && (y+j)<DECODED_IMG_BUFFER_SIZE; j++) {
+      decodedImg[DECODED_IMG_BUFFER_SIZE*y+x+i] = bitmap[j*w+i];
     }
   }
   // Return 1 to decode next block
@@ -378,7 +378,7 @@ void setup() {
   initDisplay();
 
   fetchedImg = (uint8_t *)ps_malloc(FETCHED_IMG_BUFFER_SIZE * sizeof(uint8_t));
-  decodedImg = (uint16_t *)ps_malloc(DECODED_IMG_BUFFER_SIZE * sizeof(uint16_t));
+  decodedImg = (uint16_t *)ps_malloc(DECODED_IMG_BUFFER_SIZE * DECODED_IMG_BUFFER_SIZE * sizeof(uint16_t));
   
   // Draw Boot Logo
   Serial.println("\n\n==========================BOOT=======================================");
@@ -389,7 +389,7 @@ void setup() {
 
   // Setup jpg decoder
   // The jpeg image can be scaled by a factor of 1, 2, 4, or 8
-  TJpgDec.setJpgScale(8);
+  TJpgDec.setJpgScale(1);
   // The byte order can be swapped (set true for TFT_eSPI)
   TJpgDec.setSwapBytes(false);
   // The decoder must be given the exact name of the rendering function above
