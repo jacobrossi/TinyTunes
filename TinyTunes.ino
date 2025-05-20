@@ -178,6 +178,8 @@ void mqttReconnect() {
 #define FETCHED_IMG_BUFFER_SIZE 350000 //Max bytes of the image
 //const int FETCH_CHUNK_SIZE = 128; //Max bytes to read at a time
 uint8_t *fetchedImg;
+#define DECODED_IMG_BUFFER_SIZE 640*640 //Max size of image from Spotify we'll accept
+uint16_t *decodedImg;
 // Number of milliseconds to wait without receiving any data before we give up
 const int kNetworkTimeout = 30*1000;
 // Number of milliseconds to wait if no data is available before trying again
@@ -186,6 +188,27 @@ const int kNetworkDelay = 0;
 const int kRetryDelay = 1500;
 const int kRetryTries = 4;
 int retryCount=0;
+
+void resizeImg(uint8_t *orig_img, int orig_width, int orig_height, int final_width, int final_height) {
+  // Calculate how many pixels from the original image are in each block to be averaged into a single pixel of the final image
+  int block_width = orig_width/final_width;
+  int block_height = orig_height/final_height;
+
+  for(int final_x=0; final_x<final_width; final_x++) {  //Each column in final image
+    for(int final_y=0; final_y<final_height; final_y++) {  //Each row in final image
+      //For each block, avg the pixels from the original image
+      unsigned long sum = 0;
+      for(int block_x=0; block_x<block_width; block_x++) { //Each column in the block
+        for(int block_y=0; block_y<block_height; block_y++) { //Each row in the block
+          sum += orig_img[(final_y*block_height+block_y)*orig_width +(final_x*block_width+block_x)]; //Trust me bro
+        }
+      }
+      uint16_t avg_color = sum/(block_width*block_height);
+      //Draw final pixel
+      dma_display->drawPixel(final_x, final_y, avg_color);
+    }
+  }
+}
 
 void fetchImg() {
   Serial.printf("Free Heap: %d bytes\n", ESP.getFreeHeap());
@@ -302,8 +325,13 @@ bool drawImgBlock(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap
   if ( y >= PANEL_RES_Y ) return 1;
 
   // This function will clip the image block rendering automatically at the matrix boundaries
-  dma_display->drawRGBBitmap(x,y,bitmap,w,h);
-  
+  //dma_display->drawRGBBitmap(x,y,bitmap,w,h);
+  final_y*block_height+block_y)*orig_width +(final_x*block_width+block_x
+  for(i=0; i<w; i++) {
+    for(j=0; j<h; j++) {
+      decodedImg[x+i]
+    }
+  }
   // Return 1 to decode next block
   return 1;
 }
@@ -350,6 +378,7 @@ void setup() {
   initDisplay();
 
   fetchedImg = (uint8_t *)ps_malloc(FETCHED_IMG_BUFFER_SIZE * sizeof(uint8_t));
+  decodedImg = (uint16_t *)ps_malloc(DECODED_IMG_BUFFER_SIZE * sizeof(uint16_t));
   
   // Draw Boot Logo
   Serial.println("\n\n==========================BOOT=======================================");
