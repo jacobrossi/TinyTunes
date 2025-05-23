@@ -19,7 +19,7 @@
 //    const char *mqttUser = ""; // Create a home assistant user with local access
 //    const char *mqttPassword = ""; // Password for home assistant user with local access
 
-// FLASH FILESYSTEM STUFF -----------------------------------------------------------
+// FLASH FILESYSTEM ----------------------------------------------------------------
 // External flash macros for QSPI or SPI are defined in board variant file.
 #if defined(ARDUINO_ARCH_ESP32)
 static Adafruit_FlashTransport_ESP32 flashTransport;
@@ -36,7 +36,6 @@ Adafruit_SPIFlash flash(&flashTransport);
 FatFileSystem filesys;     // Filesystem object from SdFat
 Adafruit_ImageReader reader(filesys); 
 Adafruit_USBD_MSC usb_msc; // USB mass storage object
-
 
 // LED MATRIX CONFIG - default is for Adafruit Matrix Portal S3 --------------------
 #define R1_PIN 42
@@ -89,7 +88,7 @@ void initDisplay() {
   dma_display->begin();
 }
 
-// USB MASS STORAGE HELPERS --------------------------------------------------------
+// USB MASS STORAGE  -----------------------------------------------------------
 static bool msc_changed = true; // Is set true on filesystem changes
 
 // Initialize
@@ -181,11 +180,11 @@ void mqttReconnect() {
   }
 }
 
-// HTTP ---------------------------------------------------------------------
+// HTTP ------------------------------------------------------------------------
 #define FETCHED_IMG_BUFFER_SIZE 350000 //Max bytes of the image
 //const int FETCH_CHUNK_SIZE = 128; //Max bytes to read at a time
 uint8_t *fetchedImg;
-#define DECODED_IMG_BUFFER_SIZE 640 //Max size of image from Spotify we'll accept
+#define DECODED_IMG_BUFFER_SIZE 640 //Max width/height (square) of image from we'll accept
 uint16_t *decodedImg;
 // Number of milliseconds to wait without receiving any data before we give up
 const int kNetworkTimeout = 30*1000;
@@ -195,58 +194,26 @@ const int kNetworkDelay = 0;
 const int kRetryDelay = 1500;
 const int kRetryTries = 4;
 int retryCount=0;
+int mqttPulse = 0;
 
-void resizeImg(uint16_t *orig_img, int orig_width, int orig_height, int final_width, int final_height) {
-  // Calculate how many pixels from the original image are in each block to be averaged into a single pixel of the final image
-  float block_width = (float)orig_width / final_width;
-  float block_height = (float)orig_height / final_height;
+void connectToNetwork() {
+  // Connect to WiFi
+ Serial.printf("Connecting to WiFi: %s", ssid);
+ WiFi.begin(ssid, wifiPassword);
 
-  for (int final_y = 0; final_y < final_height; final_y++) {  // Each row in the final image
-    for (int final_x = 0; final_x < final_width; final_x++) {  // Each column in the final image
+ while (WiFi.status() != WL_CONNECTED) {
+   delay(500);
+   Serial.print(".");
+ }
+ Serial.println("");
+ Serial.print("WiFi Connected: "); 
+ Serial.print(WiFi.localIP());
+ Serial.printf(" RSSI: %d\n",WiFi.RSSI());
 
-      // Calculate the bounds of the block in the original image
-      int start_x = (int)(final_x * block_width);
-      int end_x = (int)((final_x + 1) * block_width);
-      int start_y = (int)(final_y * block_height);
-      int end_y = (int)((final_y + 1) * block_height);
-
-      // Clamp the bounds to the original image dimensions
-      end_x = min(end_x, orig_width);
-      end_y = min(end_y, orig_height);
-
-      // Average the pixels in the block
-      unsigned long sum_red = 0, sum_green = 0, sum_blue = 0;
-      int count = 0;
-
-      for (int y = start_y; y < end_y; y++) {
-        for (int x = start_x; x < end_x; x++) {
-          uint16_t pixel = orig_img[y * orig_width + x];
-
-          // Extract RGB components from RGB565 format
-          uint8_t red = (pixel >> 11) & 0x1F;    // Top 5 bits
-          uint8_t green = (pixel >> 5) & 0x3F;  // Middle 6 bits
-          uint8_t blue = pixel & 0x1F;          // Bottom 5 bits
-
-          // Accumulate the RGB components
-          sum_red += red;
-          sum_green += green;
-          sum_blue += blue;
-          count++;
-        }
-      }
-
-      // Calculate the average RGB components
-      uint8_t avg_red = (count > 0) ? (sum_red / count) : 0;
-      uint8_t avg_green = (count > 0) ? (sum_green / count) : 0;
-      uint8_t avg_blue = (count > 0) ? (sum_blue / count) : 0;
-
-      // Combine the averaged RGB components back into RGB565 format
-      uint16_t avg_color = ((avg_red & 0x1F) << 11) | ((avg_green & 0x3F) << 5) | (avg_blue & 0x1F);
-
-      // Draw the averaged pixel in the final image
-      dma_display->drawPixel(final_x, final_y, avg_color);
-    }
-  }
+ // Connect to MQTT
+ mqttClient.setServer(mqttHost, mqttPort);
+ mqttClient.setCallback(mqttCallback);
+ mqttClient.setKeepAlive(60);
 }
 
 void fetchImg() {
@@ -344,6 +311,59 @@ void fetchImg() {
 }
 
 // GRAPHICS  ----------------------------------------------------------------
+void resizeImg(uint16_t *orig_img, int orig_width, int orig_height, int final_width, int final_height) {
+  // Calculate how many pixels from the original image are in each block to be averaged into a single pixel of the final image
+  float block_width = (float)orig_width / final_width;
+  float block_height = (float)orig_height / final_height;
+
+  for (int final_y = 0; final_y < final_height; final_y++) {  // Each row in the final image
+    for (int final_x = 0; final_x < final_width; final_x++) {  // Each column in the final image
+
+      // Calculate the bounds of the block in the original image
+      int start_x = (int)(final_x * block_width);
+      int end_x = (int)((final_x + 1) * block_width);
+      int start_y = (int)(final_y * block_height);
+      int end_y = (int)((final_y + 1) * block_height);
+
+      // Clamp the bounds to the original image dimensions
+      end_x = min(end_x, orig_width);
+      end_y = min(end_y, orig_height);
+
+      // Average the pixels in the block
+      unsigned long sum_red = 0, sum_green = 0, sum_blue = 0;
+      int count = 0;
+
+      for (int y = start_y; y < end_y; y++) {
+        for (int x = start_x; x < end_x; x++) {
+          uint16_t pixel = orig_img[y * orig_width + x];
+
+          // Extract RGB components from RGB565 format
+          uint8_t red = (pixel >> 11) & 0x1F;    // Top 5 bits
+          uint8_t green = (pixel >> 5) & 0x3F;  // Middle 6 bits
+          uint8_t blue = pixel & 0x1F;          // Bottom 5 bits
+
+          // Accumulate the RGB components
+          sum_red += red;
+          sum_green += green;
+          sum_blue += blue;
+          count++;
+        }
+      }
+
+      // Calculate the average RGB components
+      uint8_t avg_red = (count > 0) ? (sum_red / count) : 0;
+      uint8_t avg_green = (count > 0) ? (sum_green / count) : 0;
+      uint8_t avg_blue = (count > 0) ? (sum_blue / count) : 0;
+
+      // Combine the averaged RGB components back into RGB565 format
+      uint16_t avg_color = ((avg_red & 0x1F) << 11) | ((avg_green & 0x3F) << 5) | (avg_blue & 0x1F);
+
+      // Draw the averaged pixel in the final image
+      dma_display->drawPixel(final_x, final_y, avg_color);
+    }
+  }
+}
+
 void drawBMPFile(char *fname) {
   GFXcanvas16* bmpcanvas;
   ImageReturnCode stat; // Status from image-reading functions
@@ -380,28 +400,6 @@ bool drawImgBlock(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap
   // Return 1 to decode the next block
   return 1;
 }
-
-void connectToNetwork() {
-   // Connect to WiFi
-  Serial.printf("Connecting to WiFi: %s", ssid);
-  WiFi.begin(ssid, wifiPassword);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-  Serial.print("WiFi Connected: "); 
-  Serial.print(WiFi.localIP());
-  Serial.printf(" RSSI: %d\n",WiFi.RSSI());
-
-  // Connect to MQTT
-  mqttClient.setServer(mqttHost, mqttPort);
-  mqttClient.setCallback(mqttCallback);
-  mqttClient.setKeepAlive(60);
-}
-
-int mqttPulse = 0;
 
 // ARDUINO SETUP FUNCTION -----------------------------------------------------------
 void setup() {
