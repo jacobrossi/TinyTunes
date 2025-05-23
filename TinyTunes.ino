@@ -140,7 +140,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.printf("%s\n",url);
 
   if(strcmp(topic,"tinytunes_newmedia")==0) {
-      fetchImg();
+    fetchImg();
+  }else if (strcmp(topic, "tinytunes_pause")==0) {
+    //Pause symbol
+    dma_display->fillScreen(0);
+    dma_display->drawRoundRect(16,16,32,32,5,0xEF7D);
+    dma_display->drawFastVLine(27,20,22,0xEF7D);
+    dma_display->drawFastVLine(36,20,22,0xEF7D);
   }
 }
 
@@ -161,6 +167,7 @@ void mqttReconnect() {
         mqttClient.publish("tinytunes_status","connected");
         // ... and resubscribe
         mqttClient.subscribe("tinytunes_newmedia");
+        mqttClient.subscribe("tinytunes_pause");
       } else {
         Serial.printf("failed, code=%d  WiFi RSSI=%d try again in 3 seconds\n", mqttClient.state(), WiFi.RSSI());
         // Wait 3 seconds before retrying
@@ -191,20 +198,52 @@ int retryCount=0;
 
 void resizeImg(uint16_t *orig_img, int orig_width, int orig_height, int final_width, int final_height) {
   // Calculate how many pixels from the original image are in each block to be averaged into a single pixel of the final image
-  int block_width = orig_width/final_width;
-  int block_height = orig_height/final_height;
+  float block_width = (float)orig_width / final_width;
+  float block_height = (float)orig_height / final_height;
 
-  for(int final_x=0; final_x<final_width; final_x++) {  //Each column in final image
-    for(int final_y=0; final_y<final_height; final_y++) {  //Each row in final image
-      //For each block, avg the pixels from the original image
-      unsigned long sum = 0;
-      for(int block_x=0; block_x<block_width; block_x++) { //Each column in the block
-        for(int block_y=0; block_y<block_height; block_y++) { //Each row in the block
-          sum += orig_img[(final_y*block_height+block_y)*orig_width +(final_x*block_width+block_x)]; //Trust me bro
+  for (int final_y = 0; final_y < final_height; final_y++) {  // Each row in the final image
+    for (int final_x = 0; final_x < final_width; final_x++) {  // Each column in the final image
+
+      // Calculate the bounds of the block in the original image
+      int start_x = (int)(final_x * block_width);
+      int end_x = (int)((final_x + 1) * block_width);
+      int start_y = (int)(final_y * block_height);
+      int end_y = (int)((final_y + 1) * block_height);
+
+      // Clamp the bounds to the original image dimensions
+      end_x = min(end_x, orig_width);
+      end_y = min(end_y, orig_height);
+
+      // Average the pixels in the block
+      unsigned long sum_red = 0, sum_green = 0, sum_blue = 0;
+      int count = 0;
+
+      for (int y = start_y; y < end_y; y++) {
+        for (int x = start_x; x < end_x; x++) {
+          uint16_t pixel = orig_img[y * orig_width + x];
+
+          // Extract RGB components from RGB565 format
+          uint8_t red = (pixel >> 11) & 0x1F;    // Top 5 bits
+          uint8_t green = (pixel >> 5) & 0x3F;  // Middle 6 bits
+          uint8_t blue = pixel & 0x1F;          // Bottom 5 bits
+
+          // Accumulate the RGB components
+          sum_red += red;
+          sum_green += green;
+          sum_blue += blue;
+          count++;
         }
       }
-      uint16_t avg_color = sum/(block_width*block_height);
-      //Draw final pixel
+
+      // Calculate the average RGB components
+      uint8_t avg_red = (count > 0) ? (sum_red / count) : 0;
+      uint8_t avg_green = (count > 0) ? (sum_green / count) : 0;
+      uint8_t avg_blue = (count > 0) ? (sum_blue / count) : 0;
+
+      // Combine the averaged RGB components back into RGB565 format
+      uint16_t avg_color = ((avg_red & 0x1F) << 11) | ((avg_green & 0x3F) << 5) | (avg_blue & 0x1F);
+
+      // Draw the averaged pixel in the final image
       dma_display->drawPixel(final_x, final_y, avg_color);
     }
   }
@@ -322,17 +361,23 @@ void drawBMPFile(char *fname) {
 
 bool drawImgBlock(int16_t x, int16_t y, uint16_t w, uint16_t h, uint16_t* bitmap)
 {
-  // Stop further decoding as image is running off bottom of screen
-  //if ( y >= PANEL_RES_Y ) return 1;
-
-  // This function will clip the image block rendering automatically at the matrix boundaries
-  //dma_display->drawRGBBitmap(x,y,bitmap,w,h);
-  for(int i=0; i<w && (x+i)<DECODED_IMG_BUFFER_SIZE; i++) {
-    for(int j=0; j<h && (y+j)<DECODED_IMG_BUFFER_SIZE; j++) {
-      decodedImg[DECODED_IMG_BUFFER_SIZE*y+x+i] = bitmap[j*w+i];
-    }
+  // Stop further decoding if the block is out of bounds
+  if (x >= DECODED_IMG_BUFFER_SIZE || y >= DECODED_IMG_BUFFER_SIZE) {
+    return 1; // Stop decoding
   }
-  // Return 1 to decode next block
+
+  // Clip the block to fit within the bounds of decodedImg
+  uint16_t clipped_w = std::min<int>(w, DECODED_IMG_BUFFER_SIZE - x);
+  uint16_t clipped_h = std::min<int>(h, DECODED_IMG_BUFFER_SIZE - y);
+
+  // Copy the bitmap block into the global buffer
+  for (int j = 0; j < clipped_h; j++) {
+      for (int i = 0; i < clipped_w; i++) {
+          decodedImg[(y + j) * DECODED_IMG_BUFFER_SIZE + (x + i)] = bitmap[j * w + i];
+      }
+  }
+
+  // Return 1 to decode the next block
   return 1;
 }
 
